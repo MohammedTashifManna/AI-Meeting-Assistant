@@ -1,0 +1,8 @@
+streamlit
+fpdf
+langchain-core
+langchain-groq
+groq
+langchain-text-splitters
+pydantic
+python-dotenv
