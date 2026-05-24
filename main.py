@@ -3,13 +3,17 @@ import time
 import tempfile
 from fpdf import FPDF
 import os
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
 from groq import Groq
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field
 from typing import List
 from dotenv import load_dotenv
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.documents import Document
+from langchain_chroma import Chroma
+from typing import Optional
 
 load_dotenv()
 
@@ -17,17 +21,25 @@ if not os.getenv("GROQ_API_KEY"):
     st.error("Missing GROQ API Key")
     st.stop()
 
+st.title("AI Meeting Assistant")
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "processed_file" not in st.session_state:
+    st.session_state.processed_file = None
+
 class ActionItem(BaseModel):
 
-    assignee: str = Field(description="Person responsible for the task")
-    task: str = Field(description="Specific task assigned")
-    deadline: str = Field(description="Deadline if mentioned")
-    priority: str = Field(description="Priority level")
+    assignee: Optional[str] = Field(description="Person responsible for the task")
+    task: Optional[str] = Field(description="Specific task assigned")
+    deadline: Optional[str] = Field(description="Deadline if mentioned")
+    priority: Optional[str] = Field(description="Priority level")
 
 
 class ImportantDecision(BaseModel):
     decision: str = Field(description="What was the decision taken in the meeting")
-    reason: str = Field(description="why was that decision made in the meeting")
+    reason: Optional[str] = Field(default="Not Mentioned", description="why was that decision made in the meeting")
 
 
 class MeetingAnalysis(BaseModel):
@@ -38,8 +50,38 @@ class MeetingAnalysis(BaseModel):
 llm = ChatGroq(temperature=0.3, model="llama-3.1-8b-instant")
 structured_llm = llm.with_structured_output(MeetingAnalysis)
 client = Groq()
-st.title("AI Meeting Assistant")
 
+Meeting_Analysis_Prompt = PromptTemplate.from_template(
+    """
+        You are an expert AI Meeting Assistant.
+
+        Analyze the transcript carefully.
+
+        Extract:
+        1. Action Items
+        2. Important Decisions
+        3. Short Meeting Summary
+
+
+        Rules:
+        - Be accurate
+        - If information is missing, write "Not Mentioned"
+        - Use markdown formatting
+        - Provide a concise summary in few bullet points.
+
+        Transcript:
+        {transcript}
+        """
+)
+ans_prompt = PromptTemplate.from_template(
+    template="""
+                   Answer using this context:
+
+                   {context}
+
+                   User question:
+                   {prompt}
+                   """)
 
 def chat_stream(prompt_response):
 
@@ -89,9 +131,61 @@ def format_meeting_analysis(data):
 
     return output
 
-if "history" not in st.session_state:
-    st.session_state.history = []
 
+def process_upload(uploaded_file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+        temp_file.write(uploaded_file.read())
+        temp_file_path = temp_file.name
+    try:
+        with open(temp_file_path, "rb") as file:
+
+            transcript = client.audio.transcriptions.create(
+                file=file,
+                model="whisper-large-v3"
+            )
+            transcription = transcript.text
+    except Exception as e:
+        st.error(f"Error occurred: {e}")
+
+    return transcription
+
+
+def chunking_process(transcription):
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100,
+        add_start_index=True,
+    )
+    chunks = text_splitter.split_text(transcription)
+    documents = [Document(page_content=chunk) for chunk in chunks]
+    return documents
+
+def analysis_report(chunks):
+    transcript_text = "\n".join([doc.page_content for doc in chunks])
+    meeting_analysis_chain = Meeting_Analysis_Prompt | structured_llm
+    Analysis_response = meeting_analysis_chain.invoke({"transcript": transcript_text})
+    formatted_output = format_meeting_analysis(Analysis_response)
+    return formatted_output
+
+
+def search_query(prompt):
+    results = vectorstore.similarity_search(prompt,k=5) #k=5, top 5 matches
+    context = "\n".join(
+        [doc.page_content for doc in results]
+    )
+
+    chain = ans_prompt | llm
+    doc = chain.invoke({"context": context, "prompt": prompt})
+
+    return doc.content
+model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+persist_directory = "./chroma_db"
+vectorstore = Chroma(
+    persist_directory=persist_directory,
+    embedding_function=model
+)
+
+uploaded_file = st.file_uploader("Upload your Meeting Recordings: ", type=["mp4"])
 for i, message in enumerate(st.session_state.history):
     with st.chat_message(message["role"]):
         st.write(message["content"])
@@ -105,11 +199,6 @@ for i, message in enumerate(st.session_state.history):
                 on_change=save_feedback,
                 args=[i],
             )
-uploaded_file = st.file_uploader("Upload your Meeting Recordings: ", type=["mp4"])
-
-if "processed_file" not in st.session_state:
-    st.session_state.processed_file = None
-
 if uploaded_file is not None:
     if uploaded_file.type != "video/mp4":
         st.error("Only MP4 video files are allowed")
@@ -118,99 +207,53 @@ if uploaded_file is not None:
         st.error("File too large")
         st.stop()
     if uploaded_file.name != st.session_state.processed_file:
-
         st.session_state.processed_file = uploaded_file.name
+    with st.spinner("Please Wait While i gather all the information from your meeting...", show_time=True):
 
-        # process file
+        transcript_data = process_upload(uploaded_file)
+        chunk_data = chunking_process(transcript_data)
+        vectorstore.add_documents(chunk_data)
+        analysed_report = analysis_report(chunk_data)
+        with st.chat_message("assistant"):
+            response = st.write_stream(chat_stream(analysed_report))
+            pdf = FPDF()
+            pdf.add_page()
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
-            temp_file.write(uploaded_file.read())
-            temp_file_path = temp_file.name
-        with st.spinner("Please Wait While i gather all the information from your meeting...", show_time=True):
+            pdf.set_auto_page_break(auto=True, margin=15)
 
-            # with st.chat_message("user"):
-            # st.session_state.history.append({"role": "assistant", "content": "Gathering all information from the file... Please Wait"})
+            pdf.set_font("Arial", size=12)
 
-            # loader = AssemblyAIAudioTranscriptLoader(
-            #     file_path=temp_file_path
-            # )
-            #
-            # docs = loader.load()
+            pdf.multi_cell(0, 10, analysed_report)
 
+            # Convert to bytes
+            pdf_bytes = pdf.output(dest="S").encode("latin-1")
 
-            try:
-                with open(temp_file_path, "rb") as file:
-
-                    transcript = client.audio.transcriptions.create(
-                        file=file,
-                        model="whisper-large-v3"
-                    )
-                    transcription=transcript.text
-            except Exception as e:
-                st.error(f"Error occurred: {e}")
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=500,
-                chunk_overlap=100,
-                add_start_index=True,
+            st.download_button(
+                label="Download Report",
+                data=pdf_bytes,
+                file_name="Meeting_Analysis_Report.pdf",
+                mime="application/pdf",
+                on_click="ignore",
+                icon="📥"
             )
-            chunks = text_splitter.split_text(transcription)
-            # Display the result
-            # transcription = docs[0].page_content
-            # st.subheader("Transcript")
-            # st.write(transcription)
-            Meeting_Analysis_Prompt = ChatPromptTemplate.from_template("""
-                    You are an expert AI Meeting Assistant.
-    
-                    Analyze the transcript carefully.
-                        
-                    Extract:
-                    1. Action Items
-                    2. Important Decisions
-                    3. Short Meeting Summary
-                    
-    
-                    Rules:
-                    - Be accurate
-                    - If information is missing, write "Not Mentioned"
-                    - Use markdown formatting
-                    - Provide a concise summary in few bullet points.
-    
-                    Transcript:
-                    {transcript}
-                    """)
+            st.feedback(
+                "thumbs",
+                key=f"feedback_{len(st.session_state.history)}",
+                on_change=save_feedback,
+                args=[len(st.session_state.history)],
+            )
 
-            meeting_analysis_chain = Meeting_Analysis_Prompt | structured_llm
-            Analysis_response = meeting_analysis_chain.invoke({
-                "transcript": chunks
-            })
-            formatted_output = format_meeting_analysis(Analysis_response)
-            with st.chat_message("assistant"):
-                response = st.write_stream(chat_stream(formatted_output))
-                pdf = FPDF()
-                pdf.add_page()
-
-                pdf.set_auto_page_break(auto=True, margin=15)
-
-                pdf.set_font("Arial", size=12)
-
-                pdf.multi_cell(0, 10, formatted_output)
-
-                # Convert to bytes
-                pdf_bytes = pdf.output(dest="S").encode("latin-1")
-
-                st.download_button(
-                    label="Download Report",
-                    data=pdf_bytes,
-                    file_name="Meeting_Analysis_Report.pdf",
-                    mime="application/pdf",
-                    on_click="ignore",
-                    icon="📥"
-                )
-                st.feedback(
-                    "thumbs",
-                    key=f"feedback_{len(st.session_state.history)}",
-                    on_change=save_feedback,
-                    args=[len(st.session_state.history)],
-                )
-
-                os.remove(temp_file_path)
+if prompt := st.chat_input("Say something"):
+    with st.chat_message("user"):
+        st.write(prompt)
+    st.session_state.history.append({"role": "user", "content": prompt})
+    with st.chat_message("assistant"):
+        search_ans = search_query(prompt)
+        response = st.write_stream(chat_stream(search_ans))
+        st.feedback(
+            "thumbs",
+            key=f"feedback_{len(st.session_state.history)}",
+            on_change=save_feedback,
+            args=[len(st.session_state.history)],
+        )
+    st.session_state.history.append({"role": "assistant", "content": response})
