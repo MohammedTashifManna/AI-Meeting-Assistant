@@ -1,24 +1,38 @@
 # 🎙️ AI Meeting Assistant
 
-An AI-powered Meeting Assistant built with Streamlit, Groq, Whisper, and LangChain that automatically transcribes meeting recordings and extracts meaningful insights such as action items, decisions, and summaries.
+AI Meeting Assistant is a Retrieval-Augmented Generation (RAG) application that converts meeting recordings into intelligent insights. It transcribes meeting audio, extracts action items and important decisions, generates summaries, stores meeting context in a vector database, and enables users to ask questions about meeting content through a conversational interface.
 
 ---
 
 ## 🚀 Features
 
-✅ Upload MP4 meeting recordings  
-✅ Automatic speech-to-text transcription using Whisper Large V3  
-✅ AI-generated structured meeting analysis  
-✅ Extracts:
-
-- Action Items
-- Important Decisions
-- Meeting Summary
-
-✅ Download analysis report as PDF  
-✅ Feedback system (thumbs up/down)  
-✅ Chat-style UI using Streamlit  
-✅ Handles large meeting recordings  
+### 🎙 Meeting Audio Transcription
+      -Upload meeting recordings (.mp4)
+      -Uses Whisper Large V3 for transcription
+      
+### 📝 Meeting Analysis
+      -Extracts:
+      -Action Items
+      -Important Decisions
+      -Meeting Summary
+      
+### 🔍 RAG-based Question Answering
+      -Ask questions about uploaded meetings
+      -Retrieves relevant chunks from vector database
+      -Generates context-aware answers
+      
+### 🧠 Semantic Search
+      -Uses sentence embeddings
+      -Finds relevant meeting discussions
+      
+### 📄 PDF Report Generation
+      -Download meeting analysis report
+      
+### 👍 Feedback System
+      -Thumbs up/down for responses
+      
+### 💾 Persistent Vector Storage
+      -Stores embeddings using ChromaDB 
 
 ---
 
@@ -27,10 +41,19 @@ An AI-powered Meeting Assistant built with Streamlit, Groq, Whisper, and LangCha
 ### Frontend
 - Streamlit
 
-### AI / LLM
+### LLM
 - Groq API
 - Llama 3.1 8B Instant
 - Whisper Large V3
+
+### Speech-to-Text
+- Whisper Large V3
+
+### Embeddings
+- all-MiniLM-L6-v2
+
+### Vector DataBase
+- ChromaDB
 
 ### Frameworks & Libraries
 - LangChain
@@ -119,6 +142,9 @@ Llama 3.1 analyzes the transcript and extracts:
 ### Step 5
 Generate downloadable PDF report.
 
+### Step 6
+Ask Questions about Meeting.
+
 ---
 ## 🔒 Environment Variables
 
@@ -127,3 +153,14 @@ Generate downloadable PDF report.
 | GROQ_API_KEY | Groq API key |
 
 ---
+
+### 🧠 RAG Pipeline Used
+User Query 
+    ↓ 
+Similarity Search 
+    ↓ 
+Retrieve Relevant Chunks 
+    ↓ 
+Provide Context to LLM 
+    ↓ 
+Generate Answer
